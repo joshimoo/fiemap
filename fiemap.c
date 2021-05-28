@@ -53,6 +53,9 @@ struct fiemap *read_fiemap(int fd)
 	__u32 result_extents = 0;
 	__u64 fiemap_start = 0, fiemap_length;
 
+	const __u32 MAX_EXTENTS = 1024;
+	const ulong SIZE_OF_EXTENTS = sizeof(struct fiemap_extent) * MAX_EXTENTS;
+
 	if (fstat(fd, &statinfo) != 0) {
 		fprintf(stderr, "Cannot determine file size, errno=%d (%s)\n",
 				errno, strerror(errno));
@@ -60,7 +63,7 @@ struct fiemap *read_fiemap(int fd)
 	}
 	fiemap_length = statinfo.st_size;
 
-	fiemap = malloc(sizeof(struct fiemap));
+	fiemap = malloc(sizeof(struct fiemap) + SIZE_OF_EXTENTS);
 	if (fiemap == NULL) {
 		fprintf(stderr, "Out of memory allocating fiemap\n");
 		return NULL;
@@ -79,10 +82,12 @@ struct fiemap *read_fiemap(int fd)
 	 */
 	while (fiemap_start < fiemap_length) {
 		memset(fiemap, 0, sizeof(struct fiemap));
+		memset(fiemap->fm_extents, 0, SIZE_OF_EXTENTS);
 
 		fiemap->fm_start = fiemap_start;
 		fiemap->fm_length = fiemap_length;
 		fiemap->fm_flags = FIEMAP_FLAG_SYNC;
+		fiemap->fm_extent_count = MAX_EXTENTS;
 
 		/* Find out how many extents there are */
 		if (ioctl(fd, FS_IOC_FIEMAP, fiemap) < 0) {
@@ -96,37 +101,10 @@ struct fiemap *read_fiemap(int fd)
 			break;
 
 		/* Result fiemap have to hold all the extents for the hole file */
+		extents_size = sizeof(struct fiemap_extent) * (result_extents + fiemap->fm_mapped_extents);
 
-		/* Read in the extents */
-		extents_size = sizeof(struct fiemap_extent) *
-		                      (fiemap->fm_mapped_extents);
-
-		/* Resize fiemap to allow us to read in the extents */
-		fm_tmp = realloc(fiemap,
-				 sizeof(struct fiemap) + extents_size);
-		if (!fm_tmp) {
-			fprintf(stderr, "Out of memory reallocating fiemap\n");
-			goto fail_cleanup;
-		}
-		fiemap = fm_tmp;
-
-		memset(fiemap->fm_extents, 0, extents_size);
-		fiemap->fm_extent_count = fiemap->fm_mapped_extents;
-		fiemap->fm_mapped_extents = 0;
-
-		if (ioctl(fd, FS_IOC_FIEMAP, fiemap) < 0) {
-			fprintf(stderr, "fiemap ioctl() FS_IOC_FIEMAP failed, errno=%d (%s)\n",
-				errno, strerror(errno));
-			goto fail_cleanup;
-		}
-
-		extents_size = sizeof(struct fiemap_extent) *
-		                      (result_extents +
-				       fiemap->fm_mapped_extents);
-
-		/* Resize result_fiemap to allow us to read in the extents */
-		fm_tmp = realloc(result_fiemap,
-				 sizeof(struct fiemap) + extents_size);
+		/* Resize result_fiemap to allow us to copy over the extents */
+		fm_tmp = realloc(result_fiemap, sizeof(struct fiemap) + extents_size);
 		if (!fm_tmp) {
 			fprintf(stderr, "Out of memory allocating fiemap\n");
 			goto fail_cleanup;
