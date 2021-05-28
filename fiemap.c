@@ -43,6 +43,29 @@ void syntax(char **argv)
 	fprintf(stderr, "%s [filename]...\n",argv[0]);
 }
 
+void dump_extents(struct fiemap *fiemap, int chunk)
+{
+	if (chunk == 0) {
+		printf("#\tLogical          Physical         Length           Flags\n");
+	}
+
+	for (int i = 0; i < fiemap->fm_mapped_extents; i++) {
+		printf("%d:\t%-16.16llx %-16.16llx %-16.16llx %-4.4x\n",
+			chunk + i,
+			fiemap->fm_extents[i].fe_logical,
+			fiemap->fm_extents[i].fe_physical,
+			fiemap->fm_extents[i].fe_length,
+			fiemap->fm_extents[i].fe_flags);
+	}
+	printf("\n");
+}
+
+void dump_fiemap(struct fiemap *fiemap, char *filename)
+{
+	printf("File %s has %d extents:\n",filename, fiemap->fm_mapped_extents);
+	// dump_extents(fiemap, 0)
+}
+
 struct fiemap *read_fiemap(int fd)
 {
 	struct fiemap *fiemap = NULL;
@@ -100,6 +123,8 @@ struct fiemap *read_fiemap(int fd)
 		if (fiemap->fm_mapped_extents == 0)
 			break;
 
+		dump_extents(fiemap, result_extents);
+
 		/* Result fiemap have to hold all the extents for the hole file */
 		extents_size = sizeof(struct fiemap_extent) * (result_extents + fiemap->fm_mapped_extents);
 
@@ -143,24 +168,6 @@ fail_cleanup:
 		free(fiemap);
 
 	return NULL;
-}
-
-void dump_fiemap(struct fiemap *fiemap, char *filename)
-{
-	int i;
-
-	printf("File %s has %d extents:\n",filename, fiemap->fm_mapped_extents);
-
-	printf("#\tLogical          Physical         Length           Flags\n");
-	for (i = 0; i < fiemap->fm_mapped_extents; i++) {
-		printf("%d:\t%-16.16llx %-16.16llx %-16.16llx %-4.4x\n",
-			i,
-			fiemap->fm_extents[i].fe_logical,
-			fiemap->fm_extents[i].fe_physical,
-			fiemap->fm_extents[i].fe_length,
-			fiemap->fm_extents[i].fe_flags);
-	}
-	printf("\n");
 }
 
 int main(int argc, char **argv)
