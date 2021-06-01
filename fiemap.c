@@ -30,6 +30,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <time.h>
 
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -43,7 +44,7 @@ void syntax(char **argv)
 	fprintf(stderr, "%s [filename]...\n",argv[0]);
 }
 
-void dump_extents(struct fiemap *fiemap, int chunk)
+void dump_extents(struct fiemap *fiemap, int chunk, long long elapsed)
 {
 	if (chunk == 0) {
 		printf("#\tLogical          Physical         Length           Flags\n");
@@ -57,6 +58,7 @@ void dump_extents(struct fiemap *fiemap, int chunk)
 			fiemap->fm_extents[i].fe_length,
 			fiemap->fm_extents[i].fe_flags);
 	}
+	printf("retrieved %d extents in %lld seconds\n", fiemap->fm_mapped_extents, elapsed / 1000000000L);
 	printf("\n");
 }
 
@@ -66,6 +68,11 @@ void dump_fiemap(struct fiemap *fiemap, char *filename)
 	// dump_extents(fiemap, 0)
 }
 
+long long get_time_delta(struct timespec start, struct timespec end) {
+	return ( end.tv_nsec - start.tv_nsec ) + 
+		( end.tv_sec - start.tv_sec ) * 1000000000L;
+}
+
 struct fiemap *read_fiemap(int fd)
 {
 	struct fiemap *fiemap = NULL;
@@ -73,12 +80,14 @@ struct fiemap *read_fiemap(int fd)
 	struct fiemap *fm_tmp; /* need to store pointer on realloc */
 	int extents_size;
 	struct stat statinfo;
+	struct timespec fileStart, chunkStart, chunkEnd;
 	__u32 result_extents = 0;
 	__u64 fiemap_start = 0, fiemap_length;
 
 	const __u32 MAX_EXTENTS = 1024;
 	const ulong SIZE_OF_EXTENTS = sizeof(struct fiemap_extent) * MAX_EXTENTS;
 
+	clock_gettime(CLOCK_MONOTONIC, &fileStart);
 	if (fstat(fd, &statinfo) != 0) {
 		fprintf(stderr, "Cannot determine file size, errno=%d (%s)\n",
 				errno, strerror(errno));
@@ -112,6 +121,7 @@ struct fiemap *read_fiemap(int fd)
 		fiemap->fm_flags = FIEMAP_FLAG_SYNC;
 		fiemap->fm_extent_count = MAX_EXTENTS;
 
+		clock_gettime(CLOCK_MONOTONIC, &chunkStart);
 		/* Find out how many extents there are */
 		if (ioctl(fd, FS_IOC_FIEMAP, fiemap) < 0) {
 			fprintf(stderr, "fiemap ioctl() FS_IOC_FIEMAP failed, errno=%d (%s)\n",
@@ -119,11 +129,12 @@ struct fiemap *read_fiemap(int fd)
 			goto fail_cleanup;
 		}
 
+		clock_gettime(CLOCK_MONOTONIC, &chunkEnd);
+		dump_extents(fiemap, result_extents, get_time_delta(chunkStart, chunkEnd));
+
 		/* Nothing to process */
 		if (fiemap->fm_mapped_extents == 0)
 			break;
-
-		dump_extents(fiemap, result_extents);
 
 		/* Result fiemap have to hold all the extents for the hole file */
 		extents_size = sizeof(struct fiemap_extent) * (result_extents + fiemap->fm_mapped_extents);
@@ -157,6 +168,9 @@ struct fiemap *read_fiemap(int fd)
 
 	result_fiemap->fm_mapped_extents = result_extents;
 	free(fiemap);
+	clock_gettime(CLOCK_MONOTONIC, &chunkEnd);
+	long long elapsed = get_time_delta(fileStart, chunkEnd);
+	printf("fiemap done retrieved %d extents in %lld seconds\n", result_fiemap->fm_mapped_extents, elapsed / 1000000000L);
 
 	return result_fiemap;
 
